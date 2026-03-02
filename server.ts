@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import multer from "multer";
@@ -12,81 +11,104 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const isVercel = !!process.env.VERCEL;
-const dbPath = process.env.DATABASE_URL || (isVercel ? "/tmp/data.db" : "data.db");
-const db = new Database(dbPath);
+let db: any;
 
-// Initialize Database Tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    role TEXT DEFAULT 'student', -- student, teacher, admin, parent
-    category TEXT DEFAULT 'general', -- general, university, departmental, sas
-    points INTEGER DEFAULT 50,
-    subscription_plan TEXT DEFAULT 'free', -- free, monthly, yearly
-    subscription_expiry DATETIME,
-    session_token TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+async function getDb() {
+  if (db) return db;
+  
+  try {
+    const isVercel = !!process.env.VERCEL;
+    const dbPath = process.env.DATABASE_URL || (isVercel ? "/tmp/data.db" : "data.db");
+    
+    // Dynamic import to prevent crash if native module fails to load
+    const { default: Database } = await import("better-sqlite3");
+    db = new Database(dbPath);
+    
+    // Initialize Database Tables
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT DEFAULT 'student', -- student, teacher, admin, parent
+        category TEXT DEFAULT 'general', -- general, university, departmental, sas
+        points INTEGER DEFAULT 50,
+        subscription_plan TEXT DEFAULT 'free', -- free, monthly, yearly
+        subscription_expiry DATETIME,
+        session_token TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
 
-  CREATE TABLE IF NOT EXISTS coaching_centers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    admin_id INTEGER,
-    branding_config TEXT, -- JSON for colors, logo
-    FOREIGN KEY(admin_id) REFERENCES users(id)
-  );
+      CREATE TABLE IF NOT EXISTS coaching_centers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        admin_id INTEGER,
+        branding_config TEXT, -- JSON for colors, logo
+        FOREIGN KEY(admin_id) REFERENCES users(id)
+      );
 
-  CREATE TABLE IF NOT EXISTS questions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT NOT NULL,
-    type TEXT NOT NULL, -- mcq, written, creative
-    subject TEXT,
-    class_level TEXT,
-    topic TEXT,
-    answer TEXT,
-    explanation TEXT,
-    is_premium BOOLEAN DEFAULT 0,
-    created_by INTEGER,
-    FOREIGN KEY(created_by) REFERENCES users(id)
-  );
+      CREATE TABLE IF NOT EXISTS questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        type TEXT NOT NULL, -- mcq, written, creative
+        subject TEXT,
+        class_level TEXT,
+        topic TEXT,
+        answer TEXT,
+        explanation TEXT,
+        is_premium BOOLEAN DEFAULT 0,
+        created_by INTEGER,
+        FOREIGN KEY(created_by) REFERENCES users(id)
+      );
 
-  CREATE TABLE IF NOT EXISTS sas_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    year INTEGER,
-    subject TEXT,
-    question TEXT NOT NULL,
-    answer TEXT NOT NULL,
-    explanation TEXT,
-    category TEXT -- audit, accounts, manual
-  );
+      CREATE TABLE IF NOT EXISTS sas_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year INTEGER,
+        subject TEXT,
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        explanation TEXT,
+        category TEXT -- audit, accounts, manual
+      );
 
-  CREATE TABLE IF NOT EXISTS exams (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    coaching_id INTEGER,
-    duration INTEGER, -- in minutes
-    start_time DATETIME,
-    security_config TEXT, -- JSON for browser lock, clipboard block
-    created_by INTEGER,
-    FOREIGN KEY(coaching_id) REFERENCES coaching_centers(id),
-    FOREIGN KEY(created_by) REFERENCES users(id)
-  );
+      CREATE TABLE IF NOT EXISTS exams (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        coaching_id INTEGER,
+        duration INTEGER, -- in minutes
+        start_time DATETIME,
+        security_config TEXT, -- JSON for browser lock, clipboard block
+        created_by INTEGER,
+        FOREIGN KEY(coaching_id) REFERENCES coaching_centers(id),
+        FOREIGN KEY(created_by) REFERENCES users(id)
+      );
 
-  CREATE TABLE IF NOT EXISTS exam_results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    exam_id INTEGER,
-    user_id INTEGER,
-    score REAL,
-    feedback TEXT,
-    submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(exam_id) REFERENCES exams(id),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-`);
+      CREATE TABLE IF NOT EXISTS exam_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        exam_id INTEGER,
+        user_id INTEGER,
+        score REAL,
+        feedback TEXT,
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(exam_id) REFERENCES exams(id),
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+    `);
+    return db;
+  } catch (error) {
+    console.error("Database initialization failed:", error);
+    // Return a mock or throw a more descriptive error
+    return {
+      prepare: () => ({
+        run: () => { throw new Error("Database not available"); },
+        get: () => { throw new Error("Database not available"); },
+        all: () => { throw new Error("Database not available"); }
+      }),
+      exec: () => { throw new Error("Database not available"); }
+    };
+  }
+}
 
 const app = express();
 
@@ -94,15 +116,16 @@ app.use(express.json());
 
 // API Routes
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
+  res.json({ status: "ok", time: new Date().toISOString(), dbStatus: db ? "initialized" : "pending" });
 });
 
 // Auth Routes
 app.post("/api/auth/register", async (req, res) => {
   const { name, email, password, category } = req.body;
   try {
+    const database = await getDb();
     const hashedPassword = await bcrypt.hash(password, 10);
-    const stmt = db.prepare("INSERT INTO users (name, email, password, category, points) VALUES (?, ?, ?, ?, ?)");
+    const stmt = database.prepare("INSERT INTO users (name, email, password, category, points) VALUES (?, ?, ?, ?, ?)");
     const result = stmt.run(name, email, hashedPassword, category || 'general', 50); // 50 bonus points
     
     const token = jwt.sign({ id: result.lastInsertRowid, email, category: category || 'general' }, process.env.JWT_SECRET || 'secret');
@@ -115,7 +138,8 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+    const database = await getDb();
+    const user = database.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: "ইমেইল বা পাসওয়ার্ড ভুল!" });
     }
