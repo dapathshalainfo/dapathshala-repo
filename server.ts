@@ -12,7 +12,9 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database(process.env.DATABASE_URL || "data.db");
+const isVercel = !!process.env.VERCEL;
+const dbPath = process.env.DATABASE_URL || (isVercel ? "/tmp/data.db" : "data.db");
+const db = new Database(dbPath);
 
 // Initialize Database Tables
 db.exec(`
