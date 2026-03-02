@@ -1,0 +1,7 @@
+{
+  "name": "DaPathshala.com",
+  "description": "An AI-powered educational platform for question generation, online exams, and coaching center management.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
