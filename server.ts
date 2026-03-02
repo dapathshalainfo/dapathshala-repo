@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
@@ -88,7 +87,6 @@ db.exec(`
 `);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -133,29 +131,5 @@ app.post("/api/questions/generate", async (req, res) => {
   // This would call the Gemini service
   res.json({ message: "Request received", data: { subject, classLevel, topic, count, type } });
 });
-
-async function startServer() {
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-    
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
-  } else {
-    app.use(express.static(path.join(process.cwd(), "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(process.cwd(), "dist", "index.html"));
-    });
-  }
-}
-
-if (process.env.NODE_ENV !== "production") {
-  startServer();
-}
 
 export default app;
